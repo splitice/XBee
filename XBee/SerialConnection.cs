@@ -37,7 +37,8 @@ namespace XBee
         public SerialConnection(string port, int baudRate)
         {
             
-            _serialPort = new SerialPort(port, baudRate);
+            _serialPort = new SerialPort(port, baudRate, Parity.None, 8, StopBits.One);
+            _serialPort.ReadTimeout = 50;
 #endif
         }
 
@@ -130,6 +131,27 @@ namespace XBee
                 _readCancellationTokenSource = new CancellationTokenSource();
                 CancellationToken cancellationToken = _readCancellationTokenSource.Token;
 
+                var inputStream = new PipeStream();
+                _receiveExtraTask = Task.Run(() =>
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var ar = _serialPort.ReadByte();
+                            if (ar != -1)
+                            {
+                                inputStream.WriteByte((byte) ar);
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            if (!cancellationToken.IsCancellationRequested && !_isClosing)
+                                throw;
+                        }
+                    }
+                }, cancellationToken);
+
                 _receiveTask = Task.Run(() =>
                 {
                     while (!cancellationToken.IsCancellationRequested)
@@ -139,8 +161,9 @@ namespace XBee
 #if NETCORE
                             Frame frame = _frameSerializer.Deserialize(_serialPort.InputStream.AsStreamForRead());
 #else
-                            Frame frame = _frameSerializer.Deserialize(_serialPort.BaseStream);
+                            Frame frame = _frameSerializer.Deserialize(inputStream);
 #endif
+                            
                             var handler = FrameReceived;
                             if (handler != null)
                                 Task.Run(() =>
@@ -154,15 +177,17 @@ namespace XBee
                                 throw;
                         }
                     }
-// ReSharper disable MethodSupportsCancellation
+                    // ReSharper disable MethodSupportsCancellation
                 }, cancellationToken);
 // ReSharper restore MethodSupportsCancellation
 
                 _receiveTask.ConfigureAwait(false);
+                _receiveExtraTask.ConfigureAwait(false);
             }
         }
 
         private bool _isClosing;
+        private Task _receiveExtraTask;
 
         public void Close()
         {
@@ -187,9 +212,18 @@ namespace XBee
                 {
                 }
 
+                try
+                {
+                    _receiveExtraTask?.Wait();
+                }
+                catch (AggregateException)
+                {
+                }
+
                 _readCancellationTokenSource.Dispose();
 
                 _receiveTask = null;
+                _receiveExtraTask = null;
 
                 _isClosing = false;
             }
