@@ -5,7 +5,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using BinarySerialization;
 using XBee.Frames.AtCommands;
-
+using Parity = System.IO.Ports.Parity;
+using StopBits = System.IO.Ports.StopBits;
 #if NETCORE
 using Windows.Devices.SerialCommunication;
 #else
