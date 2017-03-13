@@ -4,6 +4,7 @@ using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading;
 using System.Threading.Tasks;
 using BinarySerialization;
+using RJCP.IO.Ports;
 using XBee.Frames.AtCommands;
 using Parity = System.IO.Ports.Parity;
 using StopBits = System.IO.Ports.StopBits;
@@ -22,7 +23,7 @@ namespace XBee
 #if NETCORE
         private readonly SerialDevice _serialPort;
 #else
-        private readonly SerialPort _serialPort;
+        private readonly SerialPortStream _serialPort;
 #endif
 
         private CancellationTokenSource _readCancellationTokenSource;
@@ -38,8 +39,8 @@ namespace XBee
         public SerialConnection(string port, int baudRate)
         {
             
-            _serialPort = new SerialPort(port, baudRate, Parity.None, 8, StopBits.One);
-            _serialPort.ReadTimeout = 50;
+            _serialPort = new SerialPortStream(port, baudRate, 8, RJCP.IO.Ports.Parity.None, RJCP.IO.Ports.StopBits.One);
+            
 #endif
         }
 
@@ -109,7 +110,8 @@ namespace XBee
 #if NETCORE
                 await _serialPort.OutputStream.WriteAsync(data.AsBuffer());
 #else
-                await _serialPort.BaseStream.WriteAsync(data, 0, data.Length, cancellationToken);
+                await _serialPort.WriteAsync(data, 0, data.Length, cancellationToken);
+                await _serialPort.FlushAsync(cancellationToken);
 #endif
             }
             finally
@@ -128,30 +130,10 @@ namespace XBee
             {
 #if !NETCORE
                 _serialPort.Open();
+                //_serialPort.ReadTimeout = 50;
 #endif
                 _readCancellationTokenSource = new CancellationTokenSource();
                 CancellationToken cancellationToken = _readCancellationTokenSource.Token;
-
-                var inputStream = new PipeStream();
-                _receiveExtraTask = Task.Run(() =>
-                {
-                    while (!cancellationToken.IsCancellationRequested)
-                    {
-                        try
-                        {
-                            var ar = _serialPort.ReadByte();
-                            if (ar != -1)
-                            {
-                                inputStream.WriteByte((byte) ar);
-                            }
-                        }
-                        catch (Exception)
-                        {
-                            if (!cancellationToken.IsCancellationRequested && !_isClosing)
-                                throw;
-                        }
-                    }
-                }, cancellationToken);
 
                 _receiveTask = Task.Run(() =>
                 {
@@ -162,7 +144,7 @@ namespace XBee
 #if NETCORE
                             Frame frame = _frameSerializer.Deserialize(_serialPort.InputStream.AsStreamForRead());
 #else
-                            Frame frame = _frameSerializer.Deserialize(inputStream);
+                            Frame frame = _frameSerializer.Deserialize(_serialPort);
 #endif
                             
                             var handler = FrameReceived;
@@ -183,7 +165,7 @@ namespace XBee
 // ReSharper restore MethodSupportsCancellation
 
                 _receiveTask.ConfigureAwait(false);
-                _receiveExtraTask.ConfigureAwait(false);
+                //_receiveExtraTask.ConfigureAwait(false);
             }
         }
 
